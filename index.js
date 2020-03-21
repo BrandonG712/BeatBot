@@ -1,124 +1,52 @@
-const Discord = require('discord.js');
-const {
-    prefix,
-    token,
-} = require('./config.json');
-const ytdl = require('ytdl-core');
+const DISCORD_TOKEN = "NjkwMDQ1MDA5NDIwMDkxNTA4.XnWMqg.Jb2U32pE6eVYGtUlAzEvXiu9SEA";
+const DISCORD_PREFIX = "~";
+const { readdirSync } = require('fs');
+const { join } = require('path');
+const MusicClient = require('./struct/Client');
+const { Collection } = require('discord.js');
+const client = new MusicClient({ token: DISCORD_TOKEN, prefix: DISCORD_PREFIX });
 
-const client = new Discord.Client();
-
-const queue = new Map();
-
-client.once('ready', () => {
-    console.log('Ready!');
-});
-
-client.once('reconnecting', () => {
-    console.log('Reconnecting!');
-});
-
-client.once('disconnect', () => {
-    console.log('Disconnect!');
-});
-
-client.on('message', async message => {
-    if (message.author.bot) return;
-    if (!message.content.startsWith(prefix)) return;
-
-    const serverQueue = queue.get(message.guild.id);
-
-    if (message.content.startsWith(`${prefix}play`)) {
-        execute(message, serverQueue);
-        return;
-    } else if (message.content.startsWith(`${prefix}skip`)) {
-        skip(message, serverQueue);
-        return;
-    } else if (message.content.startsWith(`${prefix}stop`)) {
-        stop(message, serverQueue);
-        return;
-    } else {
-        message.channel.send('You need to enter a valid command!')
-    }
-});
-
-async function execute(message, serverQueue) {
-    const args = message.content.split(' ');
-
-    const voiceChannel = message.member.voiceChannel;
-    if (!voiceChannel) return message.channel.send('You need to be in a voice channel to play music!');
-    const permissions = voiceChannel.permissionsFor(message.client.user);
-    if (!permissions.has('CONNECT') || !permissions.has('SPEAK')) {
-        return message.channel.send('I need the permissions to join and speak in your voice channel!');
-    }
-
-    const songInfo = await ytdl.getInfo(args[1]);
-    const song = {
-        title: songInfo.title,
-        url: songInfo.video_url,
-    };
-
-    if (!serverQueue) {
-        const queueContruct = {
-            textChannel: message.channel,
-            voiceChannel: voiceChannel,
-            connection: null,
-            songs: [],
-            volume: 5,
-            playing: true,
-        };
-
-        queue.set(message.guild.id, queueContruct);
-
-        queueContruct.songs.push(song);
-
-        try {
-            var connection = await voiceChannel.join();
-            queueContruct.connection = connection;
-            play(message.guild, queueContruct.songs[0]);
-        } catch (err) {
-            console.log(err);
-            queue.delete(message.guild.id);
-            return message.channel.send(err);
-        }
-    } else {
-        serverQueue.songs.push(song);
-        console.log(serverQueue.songs);
-        return message.channel.send(`${song.title} has been added to the queue!`);
-    }
-
+const commandFiles = readdirSync(join(__dirname, 'commands')).filter(file => file.endsWith('.js'));
+for (const file of commandFiles) {
+	const command = require(join(__dirname, 'commands', `${file}`));
+	client.commands.set(command.name, command);
 }
 
-function skip(message, serverQueue) {
-    if (!message.member.voiceChannel) return message.channel.send('You have to be in a voice channel to stop the music!');
-    if (!serverQueue) return message.channel.send('There is no song that I could skip!');
-    serverQueue.connection.dispatcher.end();
-}
+client.once('ready', () => console.log('READY!'));
+client.on('message', message => {
+	if (!message.content.startsWith(client.config.prefix) || message.author.bot) return;
+	const args = message.content.slice(client.config.prefix.length).split(/ +/);
+	const commandName = args.shift().toLowerCase();
+	const command = client.commands.get(commandName) || client.commands.find(cmd => cmd.aliases && cmd.aliases.includes(commandName));
+	if (!command) return;
+	if (command.guildOnly && message.channel.type !== 'text') return message.reply('I can\'t execute that command inside DMs!');
+	if (command.args && !args.length) {
+		let reply = `You didn't provide any arguments, ${message.author}!`;
+		if (command.usage) reply += `\nThe proper usage would be: \`${client.config.prefix}${command.name} ${command.usage}\``;
+		return message.channel.send(reply);
+	}
+	// if (!client.cooldowns.has(command.name)) {
+	// 	client.cooldowns.set(command.name, new Collection());
+	// }
+	// const now = Date.now();
+	// const timestamps = client.cooldowns.get(command.name);
+	// const cooldownAmount = (command.cooldown || 3) * 1000;
+	// if (timestamps.has(message.author.id)) {
+	// 	const expirationTime = timestamps.get(message.author.id) + cooldownAmount;
+	// 	if (now < expirationTime) {
+	// 		const timeLeft = (expirationTime - now) / 1000;
+	// 		return message.reply(`please wait ${timeLeft.toFixed(1)} more second(s) before reusing the \`${command.name}\` command.`);
+	// 	}
+	// }
+	// timestamps.set(message.author.id, now);
+	// setTimeout(() => timestamps.delete(message.author.id), cooldownAmount);
 
-function stop(message, serverQueue) {
-    if (!message.member.voiceChannel) return message.channel.send('You have to be in a voice channel to stop the music!');
-    serverQueue.songs = [];
-    serverQueue.connection.dispatcher.end();
-}
+	try {
+		command.execute(message, args);
+	} catch (error) {
+		console.error(error);
+		message.reply('there was an error trying to execute that command!');
+	}
+});
 
-function play(guild, song) {
-    const serverQueue = queue.get(guild.id);
-
-    if (!song) {
-        serverQueue.voice.channel.leave();
-        queue.delete(guild.id);
-        return;
-    }
-
-    const dispatcher = serverQueue.connection.playStream(ytdl(song.url))
-        .on('end', () => {
-            console.log('Music ended!');
-            serverQueue.songs.shift();
-            play(guild, serverQueue.songs[0]);
-        })
-        .on('error', error => {
-            console.error(error);
-        });
-    dispatcher.setVolumeLogarithmic(serverQueue.volume / 5);
-}
-
-client.login(token);
+client.login(client.config.token);
